@@ -1,0 +1,7 @@
+# Ship only what users need: init.lua (+ the CI plumbing). Everything else stays local.
+*
+!init.lua
+!.gitignore
+!.gitattributes
+!.github/
+!.github/**

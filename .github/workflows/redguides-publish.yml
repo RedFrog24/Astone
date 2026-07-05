@@ -1,0 +1,60 @@
+name: Publish to RedGuides
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g., v1.2.3). This should be a valid git ref (tag, branch, or SHA) that will be checked out."
+        required: true
+        type: string
+      message:
+        description: "Optional update message (plain text). If omitted, we use the GitHub Release body (manual runs try to fetch by tag)."
+        required: false
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.event.release.tag_name }}"
+
+      - name: Build zip file
+        # --prefix wraps everything in an astone/ folder (PLAIN lowercase script name - a versioned
+        # "Astone-1.80/" folder broke /lua run astone just like a loose zip). Extracting into the MQ
+        # lua folder just works.
+        run: git archive --format=zip --prefix=astone/ -o "${{ github.event.repository.name }}_${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.event.release.tag_name }}.zip" HEAD
+
+      - name: Write message from workflow input (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.message != '' }}
+        env:
+          MESSAGE: ${{ github.event.inputs.message }}
+        run: printf "%s\n" "$MESSAGE" > rg_release_notes.md
+
+      - name: Write message from GitHub Release body
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.message == '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" | jq -r '.body // ""' > rg_release_notes.md
+          else
+            jq -r '.release.body // ""' "$GITHUB_EVENT_PATH" > rg_release_notes.md
+          fi
+
+      - name: Publish to RedGuides
+        uses: RedGuides/redguides-publish@v1
+        env:
+          REDGUIDES_API_KEY: ${{ secrets.REDGUIDES_API_KEY }}
+        with:
+          resource_id: "3207"
+          # No description/README sync - AL manages the RG overview page manually (no README in repo).
+          version: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.event.release.tag_name }}"
+          file: "${{ github.event.repository.name }}_${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.event.release.tag_name }}.zip"
+          message: "rg_release_notes.md"
+          domain: "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.repository.default_branch }}/"
