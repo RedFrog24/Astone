@@ -1,8 +1,17 @@
 -- AStone
 -- Created by: RedFrog
 -- Original creation date: 02/24/2025
--- Version: 1.8.0
+-- Version controlled by `VERSION` below (single source of truth - drives the window title and the
+-- startup print). It used to be written here as a literal too; two copies only ever get edited one
+-- at a time, so the header lost the number on 1.8.1.
 -- Changelog:
+-- 1.8.2: Nav waits now have a deadline. The four "while Navigation.Active() do" loops waited
+--        forever if nav never finished (a character wedged on geometry keeps nav Active), stalling
+--        the quest silently; they now share waitForNavDone(), which gives up after 3 minutes, stops
+--        nav and names the nav that failed. navToNPC() returns false on a timeout - it is the only
+--        one of the four with no arrival check of its own to catch it.
+-- 1.8.1: GUI: replaced SetWindowFontScale (deprecated in ImGui 1.92) with PushFont/PopFont. The
+--        header text is unchanged on screen - the new call takes an absolute size, not a multiplier.
 -- 1.8.0: EMU path: PoK/Guild Hall/Lobby -> Rathemtn -> Nemeen -> Lobby -> Nedaria -> South Ro -> Selephra (no Crescent, no Eweberwyn).
 -- 1.7.19: GUI: Recessed header background (dark fill + top/bottom edges) from top to separator.
 -- 1.7.18: GUI: "Elevator Debug" text left of toggle; Server name + dropdown same line.
@@ -23,7 +32,7 @@
 -- 1.7.2: Gate made simple/reliable (no "attempt" logic): clear+mem Gate in gem 7, wait, then cast (retry if cast doesn't start / fizzle-like);
 --        Added GUI checkbox for Elevator Debug + saved to AStoneSettings.ini; Elevator stays platform-only (Door ID 1) with no spam.
 
-local VERSION = "1.8.0"
+local VERSION = "1.8.2"
 
 local mq = require('mq')
 local ImGui = require('ImGui')
@@ -135,6 +144,18 @@ local function waitFor(ms, check)
         if check() then return true end
         mq.delay(100)
     end
+    return false
+end
+
+-- Nav waits need a deadline. MQ2Nav holds Navigation.Active() true while it is still trying, so a
+-- character wedged on geometry never clears it and the quest stalls silently and forever. Three
+-- minutes is a deliberate ceiling for one in-zone nav, not a measured figure. On expiry, stop nav
+-- and say so, then let the caller's own arrival check decide: a timeout is not proof of failure,
+-- because nav can sit Active while oscillating inside range.
+local function waitForNavDone(what)
+    if waitFor(180000, function() return not mq.TLO.Navigation.Active() end) then return true end
+    mq.cmd("/squelch /nav stop")
+    AStone(string.format("\arNav to %s did not finish within 3 min; stopped nav.\ax", what))
     return false
 end
 
@@ -294,7 +315,7 @@ local function navToName(name, stopDist)
     local id = sp.ID()
     AStone("Navigating to " .. name .. "...")
     mq.cmdf("/squelch /nav id %d", id)
-    while mq.TLO.Navigation.Active() do mq.delay(200) end
+    waitForNavDone(name)
     local ok = waitFor(10000, function()
         local s = mq.TLO.Spawn(id)
         return s and s.Distance3D and s.Distance3D() <= (stopDist or 25)
@@ -335,7 +356,7 @@ local function navToVladnelg()
     local vladLoc = "-1354 -1575 30"
     AStone("Navigating to close location: " .. vladLoc)
     mq.cmdf("/squelch /nav loc %s", vladLoc)
-    while mq.TLO.Navigation.Active() do mq.delay(200) end
+    waitForNavDone("Vladnelg Galvern")
     mq.delay(2000)
 
     local spawn = mq.TLO.Spawn("Vladnelg Galvern")
@@ -368,7 +389,8 @@ local function navToNPC(target)
         end
         mq.cmdf("/squelch /nav id %d", spawn.ID())
     end
-    while mq.TLO.Navigation.Active() do mq.delay(200) end
+    -- The only one of the four with no arrival check after it, so the timeout is the only signal.
+    if not waitForNavDone(target) then return false end
     mq.delay(2000)
     return true
 end
@@ -638,7 +660,7 @@ local function handleCrescentElevator(upOrDown)
         mq.cmdf("/squelch /nav loc %s", "-1308 -1523 10")
     end
 
-    while mq.TLO.Navigation.Active() do mq.delay(200) end
+    waitForNavDone("the Crescent Reach elevator")
     mq.delay(600)
     stopAndSettle(300)
 
@@ -962,13 +984,19 @@ local function DrawGUI()
         ImGui.DrawTextureAnimation(astoneIconTex, iconSize, iconSize)
     end
     ImGui.SameLine()
-    ImGui.SetWindowFontScale(1.4)
-    -- Vertically center AStone text with the icon
+    -- PushFont(nil, size) replaces SetWindowFontScale, deprecated in ImGui 1.92. Two differences
+    -- matter: the argument is an ABSOLUTE size, not a multiplier, so the old 1.4 becomes
+    -- GetFontSize() * 1.4 - and GetFontSize() is read before the push takes effect, which is what
+    -- makes that correct. And it is a STACK, so the reset is PopFont, not a second call with 1.0.
+    ImGui.PushFont(nil, ImGui.GetFontSize() * 1.4)
+    -- Vertically center AStone text with the icon. Measured INSIDE the pushed font deliberately:
+    -- GetTextLineHeight() reports the SCALED line height, which is the height being centred against
+    -- the icon. Moving this above the push would silently centre against the unscaled text.
     local textLineH = ImGui.GetTextLineHeight and ImGui.GetTextLineHeight() or (iconSize * 0.5)
     local offsetY = (iconSize - textLineH) * 0.5
     if offsetY > 0 then ImGui.SetCursorPosY(ImGui.GetCursorPosY() + offsetY) end
     ImGui.TextColored(0.4, 1, 0.5, 1, "AStone")
-    ImGui.SetWindowFontScale(1.0)
+    ImGui.PopFont()
 
     -- Server + dropdown on same line as AStone, right-aligned; lock Y so name and dropdown align with "Server:"
     ImGui.SameLine()
