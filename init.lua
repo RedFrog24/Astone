@@ -5,6 +5,14 @@
 -- startup print). It used to be written here as a literal too; two copies only ever get edited one
 -- at a time, so the header lost the number on 1.8.1.
 -- Changelog:
+-- 1.8.3: The TTS plugin load/unload no longer touches the user's MacroQuest.ini - both calls
+--        now pass noauto. Without it MQ writes MQTextToSpeech=1 on the load and =0 on the
+--        unload (the unload only when the key already exists), so a completed run left a
+--        stray key in someone's config, and a run interrupted between the two - /lua stop
+--        during the TTS wait, or a crash - left the plugin set to auto-load on every
+--        character. A plugin the user already had loaded is untouched either way: MQ prints
+--        "already loaded" and returns before it would write anything. 'load' is spelled out
+--        because it is self-documenting, not because the bare form did something else.
 -- 1.8.2: Nav waits now have a deadline. The four "while Navigation.Active() do" loops waited
 --        forever if nav never finished (a character wedged on geometry keeps nav Active), stalling
 --        the quest silently; they now share waitForNavDone(), which gives up after 3 minutes, stops
@@ -32,7 +40,7 @@
 -- 1.7.2: Gate made simple/reliable (no "attempt" logic): clear+mem Gate in gem 7, wait, then cast (retry if cast doesn't start / fizzle-like);
 --        Added GUI checkbox for Elevator Debug + saved to AStoneSettings.ini; Elevator stays platform-only (Door ID 1) with no spam.
 
-local VERSION = "1.8.2"
+local VERSION = "1.8.3"
 
 local mq = require('mq')
 local ImGui = require('ImGui')
@@ -87,7 +95,9 @@ local function questCompleteNotify(text)
     local wasLoaded = mq.TLO.Plugin(pluginName).IsLoaded()
 
     if not wasLoaded then
-        mq.cmdf('/plugin %s', pluginName)
+        -- noauto, or MQ writes this plugin into the user's MacroQuest.ini and loads it for
+        -- every character at every client start. Their config is not ours to change.
+        mq.cmdf('/plugin %s load noauto', pluginName)
         mq.delay(500)
     end
 
@@ -99,8 +109,11 @@ local function questCompleteNotify(text)
         mq.cmd('/beep')
     end
 
+    -- Only unload what this script loaded; a plugin the user was already running is left
+    -- alone. noauto here too: a bare unload writes =0 whenever the key exists, which would
+    -- switch off the auto-load of anyone who had deliberately turned it on.
     if not wasLoaded and mq.TLO.Plugin(pluginName).IsLoaded() then
-        mq.cmdf('/plugin %s unload', pluginName)
+        mq.cmdf('/plugin %s unload noauto', pluginName)
     end
 end
 
